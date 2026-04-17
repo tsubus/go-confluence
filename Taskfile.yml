@@ -1,0 +1,42 @@
+version: "3"
+
+env:
+  CGO_ENABLED: "0"
+  GOOS: "{{default OS .GOOS}}"
+  GOARCH: "{{default ARCH .GOARCH}}"
+
+  # customize the next 3 variables
+  GO_VENDOR: " " # remove this variable to use vendor folder
+  # DOCS_EXTRA_EXCLUDE_DIRS: ",."
+
+tasks:
+  test:
+    cmds:
+      - go test -v ./...
+
+  test:race:
+    cmds:
+      - CGO_ENABLED=1 go test -race -v ./...
+
+  test:cover:
+    cmds:
+      - go test -cover ./...
+
+  test:integration:
+    dotenv: ['.env']
+    cmds:
+      - go test -tags=integration -v ./...
+
+  lint:
+    cmds:
+      - cmd: golangci-lint run -v
+
+  lint:fix:
+    cmds:
+      - cmd: golangci-lint run --fix -v
+
+  docs:
+    cmds:
+      # go install github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest
+      - gomarkdoc -f plain --output '{{"{{"}}.Dir{{"}}"}}/README.md' --exclude-dirs .../testdata/...,./vendor/...,./bin/...{{.DOCS_EXTRA_EXCLUDE_DIRS}} -e ./...
+

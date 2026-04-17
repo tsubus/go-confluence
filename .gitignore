@@ -1,0 +1,8 @@
+.python/
+.claude/
+.kimi/
+.roo/
+.code-review-graph/
+plans/
+.env
+openapi.json
