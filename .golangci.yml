@@ -35,11 +35,6 @@ issues:
   # Set to 0 to disable.
   # Default: 3
   max-same-issues: 50
-  exclude-rules:
-    - path: ^mock/
-      linters:
-        - gochecknoglobals
-        - gochecknoinits
 formatters:
   enable:
     #- goimports # checks if the code and import statements are formatted according to the 'goimports' command
@@ -489,6 +484,10 @@ linters:
       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
         source: '// ?(nolint|TODO)'
         linters: [ revive, staticcheck ]
+      - path: ^mock/
+        linters:
+          - gochecknoglobals
+          - gochecknoinits
       - path: '_test\.go'
         linters:
           - bodyclose
