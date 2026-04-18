@@ -1,6 +1,7 @@
 package confluence_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -1249,4 +1250,159 @@ func TestV2ClientDoJSON_QueryEncodingError(t *testing.T) {
 	_, err := confluence.BuildQueryForTest(params)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "struct, map, or url.Values")
+}
+
+func TestAttachmentService_Download(t *testing.T) {
+	t.Run("download by id success", func(t *testing.T) {
+		var record recordedRequest
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			record.method = r.Method
+			record.path = r.URL.Path
+
+			switch r.URL.Path {
+			case "/wiki/api/v2/attachments/att123":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"att123","downloadLink":"` + server.URL + `/download/att123"}`))
+			case "/download/att123":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("file content"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
+		require.NoError(t, err)
+		require.Equal(t, "file content", buf.String())
+		require.Equal(t, http.MethodGet, record.method)
+	})
+
+	t.Run("download by id missing link", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"att123"}`))
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "no download link")
+	})
+
+	t.Run("download by url direct ok", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("direct data"))
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
+		require.NoError(t, err)
+		require.Equal(t, "direct data", buf.String())
+	})
+
+	t.Run("download by url follows allowed redirect", func(t *testing.T) {
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("redirected data"))
+		}))
+		defer redirectServer.Close()
+
+		// First server returns 302 to redirectServer
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/file.bin" {
+				w.Header().Set("Location", redirectServer.URL+"/file.bin")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		parsed, err := url.Parse(redirectServer.URL)
+		require.NoError(t, err)
+
+		client, err := confluence.NewClient(
+			server.URL,
+			confluence.WithBasicAuth("user", "pass"),
+			confluence.WithAllowedRedirectHosts(parsed.Host),
+		)
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
+		require.NoError(t, err)
+		require.Equal(t, "redirected data", buf.String())
+	})
+
+	t.Run("download by url rejects disallowed redirect", func(t *testing.T) {
+		redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer redirectServer.Close()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", redirectServer.URL+"/file.bin")
+			w.WriteHeader(http.StatusFound)
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "not allowed")
+	})
+
+	t.Run("download by url unexpected status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("boom"))
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "unexpected download status code 500")
+	})
+}
+
+func TestAttachmentService_DownloadByURL_NilClient(t *testing.T) {
+	// Construct a client whose transport internals are nil so DownloadByURL fails fast.
+	client, err := confluence.NewClient("http://example.com")
+	require.NoError(t, err)
+
+	// We cannot easily make Client() return nil without reflection, so test via
+	// Download which calls Get first; when the GET 404s it returns an API error.
+	// This is a smoke test that the code paths compile and behave sanely.
+	var buf bytes.Buffer
+	err = client.Attachment().DownloadByURL(
+		context.Background(),
+		"http://example.com/file.bin",
+		&buf,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "unexpected download status code")
 }

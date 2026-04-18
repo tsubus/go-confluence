@@ -312,6 +312,17 @@ type AttachmentReader interface {
 		id string,
 		propertyID int64,
 	) (*models.ContentProperty, error)
+	Download(
+		ctx context.Context,
+		id string,
+		params *params.AttachmentGetParams,
+		writer io.Writer,
+	) error
+	DownloadByURL(
+		ctx context.Context,
+		downloadURL string,
+		writer io.Writer,
+	) error
 }
 
 // AttachmentWriter defines mutating attachment operations.

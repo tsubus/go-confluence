@@ -676,6 +676,43 @@ func requireIntegrationEnv(t *testing.T) integrationEnv {
 	}
 }
 
+func TestIntegration_AttachmentDownload(t *testing.T) {
+	env := requireIntegrationEnv(t)
+
+	client, err := NewClient(env.baseURL, WithBasicAuth(env.username, env.password))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Find attachments on the configured page.
+	pageID, err := strconv.ParseInt(env.pageID, 10, 64)
+	require.NoError(t, err)
+
+	limit := 10
+	attachments, err := client.Page().GetAttachments(
+		ctx,
+		pageID,
+		&PageAttachmentsParams{Limit: &limit},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, attachments)
+	if len(attachments.Results) == 0 {
+		t.Skipf("page %s has no attachments; skipping download test", env.pageID)
+	}
+
+	first := attachments.Results[0]
+	require.NotNil(t, first.Id, "attachment has no id")
+
+	// Download the first attachment.
+	var buf bytes.Buffer
+	err = client.Attachment().Download(ctx, *first.Id, nil, &buf)
+	require.NoError(t, err)
+	require.NotZero(t, buf.Len(), "downloaded attachment is empty")
+
+	t.Logf("Downloaded attachment %s (%d bytes)", *first.Id, buf.Len())
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

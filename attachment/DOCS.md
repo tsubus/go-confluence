@@ -13,6 +13,8 @@
   - [func \(s \*Service\) CreateContentProperty\(ctx context.Context, id string, request models.ContentPropertyCreateRequest\) \(\*models.ContentProperty, error\)](<#Service.CreateContentProperty>)
   - [func \(s \*Service\) Delete\(ctx context.Context, id int64, purge bool\) error](<#Service.Delete>)
   - [func \(s \*Service\) DeleteContentProperty\(ctx context.Context, id string, propertyID int64\) error](<#Service.DeleteContentProperty>)
+  - [func \(s \*Service\) Download\(ctx context.Context, id string, queryParams \*params.AttachmentGetParams, writer io.Writer\) error](<#Service.Download>)
+  - [func \(s \*Service\) DownloadByURL\(ctx context.Context, downloadURL string, writer io.Writer\) error](<#Service.DownloadByURL>)
   - [func \(s \*Service\) Get\(ctx context.Context, id string, queryParams \*params.AttachmentGetParams\) \(\*models.AttachmentSingle, error\)](<#Service.Get>)
   - [func \(s \*Service\) GetComments\(ctx context.Context, id string, queryParams \*params.AttachmentCommentsParams\) \(\*params.MultiEntityResultAttachmentCommentModel, error\)](<#Service.GetComments>)
   - [func \(s \*Service\) GetContentProperties\(ctx context.Context, id string, queryParams \*params.ContentPropertiesParams\) \(\*params.MultiEntityResultContentProperty, error\)](<#Service.GetContentProperties>)
@@ -61,6 +63,20 @@ Service provides attachment REST v2 operations.
 	func (s *Service) DeleteContentProperty(ctx context.Context, id string, propertyID int64) error
 
 
+
+<a name="Service.Download"></a>
+### func \(\*Service\) Download
+
+	func (s *Service) Download(ctx context.Context, id string, queryParams *params.AttachmentGetParams, writer io.Writer) error
+
+Download fetches attachment metadata and streams the file to writer.
+
+<a name="Service.DownloadByURL"></a>
+### func \(\*Service\) DownloadByURL
+
+	func (s *Service) DownloadByURL(ctx context.Context, downloadURL string, writer io.Writer) error
+
+DownloadByURL streams an attachment from a direct download URL to writer.
 
 <a name="Service.Get"></a>
 ### func \(\*Service\) Get

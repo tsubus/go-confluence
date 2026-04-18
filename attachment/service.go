@@ -2,7 +2,9 @@ package attachment
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -215,6 +217,101 @@ func (s *Service) DeleteContentProperty(
 	err := s.v2.DoJSON(ctx, http.MethodDelete, path, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("delete attachment property: %w", err)
+	}
+	return nil
+}
+
+// Download fetches attachment metadata and streams the file to writer.
+func (s *Service) Download(
+	ctx context.Context,
+	id string,
+	queryParams *params.AttachmentGetParams,
+	writer io.Writer,
+) error {
+	attachment, err := s.Get(ctx, id, queryParams)
+	if err != nil {
+		return fmt.Errorf("fetch attachment metadata: %w", err)
+	}
+	if attachment.DownloadLink == nil || *attachment.DownloadLink == "" {
+		return errors.New("attachment has no download link")
+	}
+	return s.DownloadByURL(ctx, *attachment.DownloadLink, writer)
+}
+
+// DownloadByURL streams an attachment from a direct download URL to writer.
+func (s *Service) DownloadByURL(
+	ctx context.Context,
+	downloadURL string,
+	writer io.Writer,
+) error {
+	client := s.v2.Client()
+	if client == nil {
+		return errors.New("transport client is required")
+	}
+	req, err := client.NewRequest(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("create download request: %w", err)
+	}
+	resp, err := client.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute download request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	switch resp.StatusCode {
+	case http.StatusFound:
+		return s.downloadFromRedirect(ctx, resp, writer)
+	case http.StatusOK:
+		_, err = io.Copy(writer, resp.Body)
+		if err != nil {
+			return fmt.Errorf("stream download response: %w", err)
+		}
+		return nil
+	default:
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("read download error response: %w", readErr)
+		}
+		return fmt.Errorf("unexpected download status code %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+func (s *Service) downloadFromRedirect(
+	ctx context.Context,
+	resp *http.Response,
+	writer io.Writer,
+) error {
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return errors.New("download response missing Location header")
+	}
+	parsedBase, err := url.Parse(s.v2.Client().BaseURL)
+	if err != nil {
+		return fmt.Errorf("parse baseURL: %w", err)
+	}
+	downloadURL, err := parsedBase.Parse(location)
+	if err != nil {
+		return fmt.Errorf("parse Location header %q: %w", location, err)
+	}
+	err = s.ensureRedirectHostAllowed(downloadURL.Host)
+	if err != nil {
+		return err
+	}
+	return s.DownloadByURL(ctx, downloadURL.String(), writer)
+}
+
+func (s *Service) ensureRedirectHostAllowed(host string) error {
+	if host == "" {
+		return errors.New("redirect host is empty")
+	}
+	client := s.v2.Client()
+	if len(client.AllowedRedirectHosts) == 0 {
+		return errors.New("allowed redirect host list is empty")
+	}
+	_, ok := client.AllowedRedirectHosts[host]
+	if !ok {
+		return fmt.Errorf("redirect host %q is not allowed", host)
 	}
 	return nil
 }
