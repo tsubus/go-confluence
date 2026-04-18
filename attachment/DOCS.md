@@ -17,7 +17,7 @@
   - [func \(s \*Service\) GetComments\(ctx context.Context, id string, queryParams \*params.AttachmentCommentsParams\) \(\*params.MultiEntityResultAttachmentCommentModel, error\)](<#Service.GetComments>)
   - [func \(s \*Service\) GetContentProperties\(ctx context.Context, id string, queryParams \*params.ContentPropertiesParams\) \(\*params.MultiEntityResultContentProperty, error\)](<#Service.GetContentProperties>)
   - [func \(s \*Service\) GetContentPropertyByID\(ctx context.Context, id string, propertyID int64\) \(\*models.ContentProperty, error\)](<#Service.GetContentPropertyByID>)
-  - [func \(s \*Service\) GetLabels\(ctx context.Context, id int64, queryParams \*params.AttachmentLabelsParams\) \(\*params.MultiEntityResultLabel, error\)](<#Service.GetLabels>)
+  - [func \(s \*Service\) GetLabels\(ctx context.Context, id string, queryParams \*params.AttachmentLabelsParams\) \(\*params.MultiEntityResultLabel, error\)](<#Service.GetLabels>)
   - [func \(s \*Service\) GetOperations\(ctx context.Context, id string\) \(\*models.PermittedOperationsResponse, error\)](<#Service.GetOperations>)
   - [func \(s \*Service\) GetVersionDetails\(ctx context.Context, id string, versionNumber int64\) \(\*models.DetailedVersion, error\)](<#Service.GetVersionDetails>)
   - [func \(s \*Service\) GetVersions\(ctx context.Context, id string, queryParams \*params.AttachmentVersionsParams\) \(\*params.MultiEntityResultAttachmentVersion, error\)](<#Service.GetVersions>)
@@ -93,7 +93,7 @@ Service provides attachment REST v2 operations.
 <a name="Service.GetLabels"></a>
 ### func \(\*Service\) GetLabels
 
-	func (s *Service) GetLabels(ctx context.Context, id int64, queryParams *params.AttachmentLabelsParams) (*params.MultiEntityResultLabel, error)
+	func (s *Service) GetLabels(ctx context.Context, id string, queryParams *params.AttachmentLabelsParams) (*params.MultiEntityResultLabel, error)
 
 
 

@@ -69,7 +69,7 @@ func (s *Service) Delete(ctx context.Context, id int64, purge bool) error {
 
 func (s *Service) GetLabels(
 	ctx context.Context,
-	id int64,
+	id string,
 	queryParams *params.AttachmentLabelsParams,
 ) (*params.MultiEntityResultLabel, error) {
 	query, err := transport.BuildQuery(queryParams)
@@ -77,7 +77,7 @@ func (s *Service) GetLabels(
 		return nil, fmt.Errorf("build attachment labels query: %w", err)
 	}
 	var response params.MultiEntityResultLabel
-	path := fmt.Sprintf("attachments/%d/labels", id)
+	path := fmt.Sprintf("attachments/%s/labels", id)
 	err = s.v2.DoJSON(ctx, http.MethodGet, path, query, nil, &response)
 	if err != nil {
 		return nil, fmt.Errorf("request attachment labels: %w", err)

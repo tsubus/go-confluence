@@ -211,7 +211,7 @@ AttachmentReader defines read\-only attachment operations.
 	    ) (*models.AttachmentSingle, error)
 	    GetLabels(
 	        ctx context.Context,
-	        id int64,
+	        id string,
 	        params *params.AttachmentLabelsParams,
 	    ) (*params.MultiEntityResultLabel, error)
 	    GetOperations(ctx context.Context, id string) (*models.PermittedOperationsResponse, error)
