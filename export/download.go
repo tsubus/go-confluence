@@ -1,20 +1,21 @@
-package confluence
+package export
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 )
 
-func (c *Client) downloadFromRedirect(ctx context.Context, resp *http.Response, writer io.Writer) error {
+func (c *Helper) downloadFromRedirect(ctx context.Context, resp *http.Response, writer io.Writer) error {
 	location := resp.Header.Get("Location")
 	if location == "" {
 		return ErrMissingLocation
 	}
 
-	parsedBase, err := url.Parse(c.baseURL)
+	parsedBase, err := url.Parse(c.client.BaseURL)
 	if err != nil {
 		return fmt.Errorf("parse baseURL: %w", err)
 	}
@@ -24,16 +25,35 @@ func (c *Client) downloadFromRedirect(ctx context.Context, resp *http.Response, 
 		return fmt.Errorf("parse Location header %q: %w", location, err)
 	}
 
-	return c.downloadPDF(ctx, downloadURL.String(), writer)
-}
-
-func (c *Client) downloadPDF(ctx context.Context, downloadURL string, writer io.Writer) (err error) {
-	req, err := c.newRequest(ctx, downloadURL)
+	err = c.ensureRedirectHostAllowed(downloadURL.Host)
 	if err != nil {
 		return err
 	}
 
-	pdfResp, err := c.httpClient.Do(req)
+	return c.downloadPDF(ctx, downloadURL.String(), writer)
+}
+
+func (c *Helper) ensureRedirectHostAllowed(host string) error {
+	if host == "" {
+		return errors.New("redirect host is empty")
+	}
+	if len(c.client.AllowedRedirectHosts) == 0 {
+		return errors.New("allowed redirect host list is empty")
+	}
+	_, ok := c.client.AllowedRedirectHosts[host]
+	if !ok {
+		return fmt.Errorf("redirect host %q is not allowed", host)
+	}
+	return nil
+}
+
+func (c *Helper) downloadPDF(ctx context.Context, downloadURL string, writer io.Writer) (err error) {
+	req, err := c.client.NewRequest(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("create download request: %w", err)
+	}
+
+	pdfResp, err := c.client.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("execute download request: %w", err)
 	}

@@ -1,51 +1,49 @@
-// Package confluence provides a minimal client for exporting Confluence
-// pages as PDFs. It supports both Confluence Server/Data Center and
-// Confluence Cloud installations.
+// Package confluence provides a client for Confluence REST v2 APIs and PDF exports.
 //
+// Export supports both Confluence Server/Data Center and Confluence Cloud:
 // Server/Data Center: the export action returns a 302 redirect to the PDF.
 // Confluence Cloud: the export action starts a background task; the client
 // polls the task progress endpoint and downloads the PDF when ready.
 package confluence
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/umats/go-confluence/export"
 )
 
 const (
 	defaultTimeout      = 30 * time.Second
 	defaultPollInterval = 3 * time.Second
-	minTaskIDMatches    = 2
-	progressComplete    = 100
 )
 
 var (
-	taskIDRegex = regexp.MustCompile(`<meta[^>]+name="ajs-taskId"[^>]+content="([^"]+)"`)
 	// ErrMissingLocation indicates the export response lacked a Location header.
-	ErrMissingLocation = errors.New("export response missing Location header")
+	ErrMissingLocation = export.ErrMissingLocation
 	// ErrTaskFailed indicates the Confluence export task failed.
-	ErrTaskFailed = errors.New("pdf export task failed")
+	ErrTaskFailed = export.ErrTaskFailed
 	// ErrTaskResultEmpty indicates the task finished without a result URL.
-	ErrTaskResultEmpty = errors.New("task completed but result URL is empty")
+	ErrTaskResultEmpty = export.ErrTaskResultEmpty
 	// ErrTaskIDNotFound indicates the Cloud export HTML lacked a task ID.
-	ErrTaskIDNotFound = errors.New("taskId meta tag not found")
+	ErrTaskIDNotFound = export.ErrTaskIDNotFound
 )
 
 // Client exports Confluence pages as PDFs.
 type Client struct {
-	baseURL      string
-	httpClient   *http.Client
-	username     string
-	password     string
-	pollInterval time.Duration
-	pollTimeout  time.Duration
-	requireHTTPS bool
+	baseURL                  string
+	httpClient               *http.Client
+	username                 string
+	password                 string
+	pollInterval             time.Duration
+	pollTimeout              time.Duration
+	requireHTTPS             bool
+	allowedRedirectHosts     map[string]struct{}
+	allowCrossHostContentURL bool
 }
 
 // HTTPDoer abstracts [http.Client] for testing and future REST APIs.
@@ -117,6 +115,35 @@ func WithRequireHTTPS() Option {
 	}
 }
 
+// WithAllowedRedirectHosts restricts download redirects to the provided hosts.
+//
+// If not set, redirects are only allowed to the client's base URL host.
+func WithAllowedRedirectHosts(hosts ...string) Option {
+	return func(c *Client) error {
+		if len(hosts) == 0 {
+			return errors.New("allowed redirect hosts cannot be empty")
+		}
+		allowed := make(map[string]struct{}, len(hosts))
+		for _, host := range hosts {
+			trimmed := strings.TrimSpace(host)
+			if trimmed == "" {
+				return errors.New("allowed redirect host cannot be empty")
+			}
+			allowed[trimmed] = struct{}{}
+		}
+		c.allowedRedirectHosts = allowed
+		return nil
+	}
+}
+
+// WithAllowCrossHostContentURL allows custom content URLs to point at other hosts.
+func WithAllowCrossHostContentURL() Option {
+	return func(c *Client) error {
+		c.allowCrossHostContentURL = true
+		return nil
+	}
+}
+
 // NewClient creates a new Confluence PDF export client.
 func NewClient(baseURL string, opts ...Option) (*Client, error) {
 	if strings.TrimSpace(baseURL) == "" {
@@ -143,7 +170,8 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 				return http.ErrUseLastResponse
 			},
 		},
-		pollInterval: defaultPollInterval,
+		pollInterval:         defaultPollInterval,
+		allowedRedirectHosts: map[string]struct{}{parsed.Host: {}},
 	}
 
 	for _, opt := range opts {
@@ -158,17 +186,4 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 	}
 
 	return c, nil
-}
-
-func (c *Client) newRequest(ctx context.Context, requestURL string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	if c.username != "" {
-		req.SetBasicAuth(c.username, c.password)
-	}
-
-	return req, nil
 }

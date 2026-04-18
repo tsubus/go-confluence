@@ -23,7 +23,7 @@ tasks:
       - go test -cover ./...
 
   test:integration:
-    dotenv: ['.env']
+    dotenv: [ ".env" ]
     cmds:
       - go test -tags=integration -v ./...
 
@@ -38,5 +38,7 @@ tasks:
   docs:
     cmds:
       # go install github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest
-      - gomarkdoc -f plain --output '{{"{{"}}.Dir{{"}}"}}/README.md' --exclude-dirs .../testdata/...,./vendor/...,./bin/...{{.DOCS_EXTRA_EXCLUDE_DIRS}} -e ./...
-
+      - gomarkdoc -f plain --output '{{"{{"}}.Dir{{"}}"}}/DOCS.md'
+        --exclude-dirs
+        .../testdata/...,./vendor/...,./bin/...{{.DOCS_EXTRA_EXCLUDE_DIRS}} -e
+        ./...

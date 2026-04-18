@@ -39,6 +39,38 @@ jobs:
       - name: Run tests with race detector
         run: task test:race
 
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    # Skip on PRs from forks because they cannot access secrets/vars.
+    if: github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run integration tests
+        run: task test:integration
+        env:
+          CONFLUENCE_URL: ${{ secrets.CONFLUENCE_URL }}
+          CONFLUENCE_USERNAME: ${{ secrets.CONFLUENCE_USERNAME }}
+          CONFLUENCE_PASSWORD: ${{ secrets.CONFLUENCE_PASSWORD }}
+          CONFLUENCE_PAGE_ID: ${{ vars.CONFLUENCE_PAGE_ID }}
+          CONFLUENCE_SPACE_ID: ${{ vars.CONFLUENCE_SPACE_ID }}
+          CONFLUENCE_ATTACHMENT_ID: ${{ vars.CONFLUENCE_ATTACHMENT_ID }}
+          CONFLUENCE_LABEL_ID: ${{ vars.CONFLUENCE_LABEL_ID }}
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/umats/go-confluence/export"
 )
 
 func TestDownloadFromRedirect(t *testing.T) {
@@ -18,13 +20,14 @@ func TestDownloadFromRedirect(t *testing.T) {
 		name           string
 		baseURL        string
 		locationHeader string
+		client         *Client
 		wantErr        error
 		wantErrText    string
 	}{
 		{
 			name:    "missing location",
 			baseURL: "http://localhost:8080",
-			wantErr: ErrMissingLocation,
+			wantErr: export.ErrMissingLocation,
 		},
 		{
 			name:           "invalid base URL",
@@ -38,17 +41,45 @@ func TestDownloadFromRedirect(t *testing.T) {
 			locationHeader: "http://[::1",
 			wantErrText:    "parse Location header",
 		},
+		{
+			name:           "redirect host not allowed",
+			baseURL:        "http://localhost:8080",
+			locationHeader: "http://evil.example.com/download/file.pdf",
+			client: &Client{
+				baseURL: "http://localhost:8080",
+				allowedRedirectHosts: map[string]struct{}{
+					"localhost:8080": {},
+				},
+			},
+			wantErrText: "not allowed",
+		},
+		{
+			name:           "redirect allow list empty",
+			baseURL:        "http://localhost:8080",
+			locationHeader: "http://localhost:8080/download/file.pdf",
+			client:         &Client{baseURL: "http://localhost:8080"},
+			wantErrText:    "allowed redirect host list is empty",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &Client{baseURL: tt.baseURL}
+			client := tt.client
+			if client == nil {
+				client = &Client{
+					baseURL: tt.baseURL,
+					allowedRedirectHosts: map[string]struct{}{
+						"localhost:8080": {},
+					},
+				}
+			}
 			resp := &http.Response{Header: http.Header{}}
 			if tt.locationHeader != "" {
 				resp.Header.Set("Location", tt.locationHeader)
 			}
 
-			err := client.downloadFromRedirect(context.Background(), resp, io.Discard)
+			helper := export.NewHelper(newTransportClient(client))
+			err := helper.DownloadFromRedirect(context.Background(), resp, io.Discard)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("expected error %v, got %v", tt.wantErr, err)
@@ -112,7 +143,8 @@ func TestDownloadPDF(t *testing.T) {
 				}, nil
 			})}}
 
-			err := client.downloadPDF(context.Background(), "http://example.com/file.pdf", tt.writer)
+			helper := export.NewHelper(newTransportClient(client))
+			err := helper.DownloadPDF(context.Background(), "http://example.com/file.pdf", tt.writer)
 			if err == nil {
 				t.Fatalf("expected error containing %q", tt.wantErrText)
 			}
@@ -125,6 +157,7 @@ func TestDownloadPDF(t *testing.T) {
 
 func TestHandleOKResponse_PDF(t *testing.T) {
 	client := &Client{}
+	helper := export.NewHelper(newTransportClient(client))
 
 	resp := &http.Response{
 		Header:     http.Header{"Content-Type": []string{"application/pdf"}},
@@ -133,7 +166,7 @@ func TestHandleOKResponse_PDF(t *testing.T) {
 	}
 
 	var buffer bytes.Buffer
-	err := client.handleOKResponse(context.Background(), resp, &buffer)
+	err := helper.HandleOKResponse(context.Background(), resp, &buffer)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -144,6 +177,7 @@ func TestHandleOKResponse_PDF(t *testing.T) {
 
 func TestHandleOKResponse_HTMLMissingTaskID(t *testing.T) {
 	client := &Client{}
+	helper := export.NewHelper(newTransportClient(client))
 
 	resp := &http.Response{
 		Header:     http.Header{"Content-Type": []string{"text/html"}},
@@ -151,11 +185,11 @@ func TestHandleOKResponse_HTMLMissingTaskID(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !errors.Is(err, ErrTaskIDNotFound) {
+	if !errors.Is(err, export.ErrTaskIDNotFound) {
 		t.Fatalf("expected ErrTaskIDNotFound, got %v", err)
 	}
 }
@@ -197,7 +231,8 @@ func TestFetchProgress(t *testing.T) {
 				}, nil
 			})}}
 
-			_, err := client.fetchProgress(context.Background(), "http://example.com/progress")
+			helper := export.NewHelper(newTransportClient(client))
+			_, err := helper.FetchProgress(context.Background(), "http://example.com/progress")
 			if err == nil {
 				t.Fatalf("expected error containing %q", tt.wantErrText)
 			}
@@ -210,11 +245,12 @@ func TestFetchProgress(t *testing.T) {
 
 func TestWaitForNextPoll_ContextCancelled(t *testing.T) {
 	client := &Client{pollInterval: 10 * time.Millisecond}
+	helper := export.NewHelper(newTransportClient(client))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := client.waitForNextPoll(ctx)
+	err := helper.WaitForNextPoll(ctx)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -242,7 +278,8 @@ func TestPollTaskProgress_ContextCancelled(t *testing.T) {
 		})},
 	}
 
-	_, err := client.pollTaskProgress(ctx, "task-1")
+	helper := export.NewHelper(newTransportClient(client))
+	_, err := helper.PollTaskProgress(ctx, "task-1")
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -277,11 +314,12 @@ func TestHandleOKResponse_TaskResultEmpty(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !errors.Is(err, ErrTaskResultEmpty) {
+	if !errors.Is(err, export.ErrTaskResultEmpty) {
 		t.Fatalf("expected ErrTaskResultEmpty, got %v", err)
 	}
 }
@@ -300,11 +338,18 @@ func TestDownloadFromRedirect_Success(t *testing.T) {
 		}
 	})
 
-	client := &Client{baseURL: server.URL, httpClient: server.Client()}
+	client := &Client{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		allowedRedirectHosts: map[string]struct{}{
+			server.Listener.Addr().String(): {},
+		},
+	}
 	resp := &http.Response{Header: http.Header{"Location": []string{"/download/file.pdf"}}}
 
 	var buffer bytes.Buffer
-	err := client.downloadFromRedirect(context.Background(), resp, &buffer)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.DownloadFromRedirect(context.Background(), resp, &buffer)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -324,7 +369,8 @@ func TestFetchProgress_Success(t *testing.T) {
 		}, nil
 	})}}
 
-	pr, err := client.fetchProgress(context.Background(), "http://example.com/progress")
+	helper := export.NewHelper(newTransportClient(client))
+	pr, err := helper.FetchProgress(context.Background(), "http://example.com/progress")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -341,7 +387,8 @@ func TestFetchProgress_Success(t *testing.T) {
 
 func TestExportURL(t *testing.T) {
 	client := &Client{baseURL: "http://localhost:8080/base"}
-	url, err := client.exportURL("123")
+	transportClient := newTransportClient(client)
+	url, err := transportClient.ExportURL("123")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -355,7 +402,7 @@ func TestExportURL(t *testing.T) {
 
 func TestNewRequest_BasicAuth(t *testing.T) {
 	client := &Client{username: "user", password: "pass"}
-	req, err := client.newRequest(context.Background(), "http://example.com")
+	req, err := newTransportClient(client).NewRequest(context.Background(), http.MethodGet, "http://example.com", nil)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -370,7 +417,7 @@ func TestNewRequest_BasicAuth(t *testing.T) {
 
 func TestNewRequest_InvalidURL(t *testing.T) {
 	client := &Client{}
-	_, err := client.newRequest(context.Background(), "://bad-url")
+	_, err := newTransportClient(client).NewRequest(context.Background(), http.MethodGet, "://bad-url", nil)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -388,7 +435,8 @@ func TestHandleOKResponse_PDFCopyError(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -406,7 +454,8 @@ func TestHandleOKResponse_ReadHTMLFailure(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -441,11 +490,12 @@ func TestHandleOKResponse_TaskFailed(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if !errors.Is(err, ErrTaskFailed) {
+	if !errors.Is(err, export.ErrTaskFailed) {
 		t.Fatalf("expected ErrTaskFailed, got %v", err)
 	}
 }
@@ -476,7 +526,8 @@ func TestHandleOKResponse_UnexpectedState(t *testing.T) {
 		StatusCode: http.StatusOK,
 	}
 
-	err := client.handleOKResponse(context.Background(), resp, io.Discard)
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -500,13 +551,13 @@ func TestExtractTaskID(t *testing.T) {
 		{
 			name:        "missing task id",
 			html:        "<html>missing</html>",
-			wantErrText: ErrTaskIDNotFound.Error(),
+			wantErrText: export.ErrTaskIDNotFound.Error(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := extractTaskID(tt.html)
+			got, err := export.ExtractTaskIDForTest(tt.html)
 			if tt.wantErrText != "" {
 				if err == nil {
 					t.Fatalf("expected error")

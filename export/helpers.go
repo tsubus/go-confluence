@@ -1,4 +1,4 @@
-package confluence
+package export
 
 // ProgressResponseForTest builds a ProgressResponse for external tests.
 func ProgressResponseForTest(progress int, state, result string) ProgressResponse {
