@@ -115,23 +115,24 @@ func WithRequireHTTPS() Option {
 	}
 }
 
-// WithAllowedRedirectHosts restricts download redirects to the provided hosts.
+// WithAllowedRedirectHosts adds additional hosts that download redirects are allowed to target.
 //
-// If not set, redirects are only allowed to the client's base URL host.
+// The client's base URL host is always allowed and cannot be removed.
 func WithAllowedRedirectHosts(hosts ...string) Option {
 	return func(c *Client) error {
 		if len(hosts) == 0 {
 			return errors.New("allowed redirect hosts cannot be empty")
 		}
-		allowed := make(map[string]struct{}, len(hosts))
+		if c.allowedRedirectHosts == nil {
+			c.allowedRedirectHosts = make(map[string]struct{})
+		}
 		for _, host := range hosts {
 			trimmed := strings.TrimSpace(host)
 			if trimmed == "" {
 				return errors.New("allowed redirect host cannot be empty")
 			}
-			allowed[trimmed] = struct{}{}
+			c.allowedRedirectHosts[trimmed] = struct{}{}
 		}
-		c.allowedRedirectHosts = allowed
 		return nil
 	}
 }

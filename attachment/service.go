@@ -248,6 +248,17 @@ func (s *Service) DownloadByURL(
 	if client == nil {
 		return errors.New("transport client is required")
 	}
+	parsedURL, err := url.Parse(downloadURL)
+	if err != nil {
+		return fmt.Errorf("parse download URL: %w", err)
+	}
+	if parsedURL.Host == "" {
+		return errors.New("download URL must include a host")
+	}
+	err = s.ensureRedirectHostAllowed(parsedURL.Host)
+	if err != nil {
+		return fmt.Errorf("download URL host validation failed: %w", err)
+	}
 	req, err := client.NewRequest(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("create download request: %w", err)

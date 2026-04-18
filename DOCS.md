@@ -639,9 +639,9 @@ WithAllowCrossHostContentURL allows custom content URLs to point at other hosts.
 
 	func WithAllowedRedirectHosts(hosts ...string) Option
 
-WithAllowedRedirectHosts restricts download redirects to the provided hosts.
+WithAllowedRedirectHosts adds additional hosts that download redirects are allowed to target.
 
-If not set, redirects are only allowed to the client's base URL host.
+The client's base URL host is always allowed and cannot be removed.
 
 <a name="WithBasicAuth"></a>
 ### func WithBasicAuth

@@ -1387,6 +1387,16 @@ func TestAttachmentService_Download(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorContains(t, err, "unexpected download status code 500")
 	})
+
+	t.Run("download by url rejects disallowed host", func(t *testing.T) {
+		client, err := confluence.NewClient("http://example.com", confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().DownloadByURL(context.Background(), "http://evil.com/file.bin", &buf)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "not allowed")
+	})
 }
 
 func TestAttachmentService_DownloadByURL_NilClient(t *testing.T) {
