@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"strings"
 
 	"github.com/umats/go-confluence/internal/transport"
 	"github.com/umats/go-confluence/models"
@@ -232,10 +234,56 @@ func (s *Service) Download(
 	if err != nil {
 		return fmt.Errorf("fetch attachment metadata: %w", err)
 	}
+	pageID := attachmentContainerID(attachment)
+	if pageID != "" {
+		counting := countingWriter{writer: writer}
+		err = s.downloadByAPI(ctx, pageID, attachment.Id, &counting)
+		if err == nil {
+			return nil
+		}
+		if counting.written > 0 {
+			return err
+		}
+	}
 	if attachment.DownloadLink == nil || *attachment.DownloadLink == "" {
 		return errors.New("attachment has no download link")
 	}
-	return s.DownloadByURL(ctx, *attachment.DownloadLink, writer)
+	downloadURL, err := resolveDownloadURL(s.v2.Client().BaseURL, *attachment.DownloadLink)
+	if err != nil {
+		return err
+	}
+	return s.DownloadByURL(ctx, downloadURL, writer)
+}
+
+// downloadByAPI streams an attachment through Confluence's supported download endpoint.
+func (s *Service) downloadByAPI(
+	ctx context.Context,
+	pageID string,
+	attachmentID *string,
+	writer io.Writer,
+) error {
+	if attachmentID == nil || *attachmentID == "" {
+		return errors.New("attachment has no id")
+	}
+	downloadURL, err := attachmentDownloadAPIURL(s.v2.Client().BaseURL, pageID, *attachmentID)
+	if err != nil {
+		return err
+	}
+	return s.DownloadByURL(ctx, downloadURL, writer)
+}
+
+type countingWriter struct {
+	writer  io.Writer
+	written int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.written += int64(n)
+	if err != nil {
+		return n, fmt.Errorf("write attachment bytes: %w", err)
+	}
+	return n, nil
 }
 
 // DownloadByURL streams an attachment from a direct download URL to writer.
@@ -255,9 +303,11 @@ func (s *Service) DownloadByURL(
 	if parsedURL.Host == "" {
 		return fmt.Errorf("download URL %q must include a host", downloadURL)
 	}
-	err = s.ensureRedirectHostAllowed(parsedURL.Host)
-	if err != nil {
-		return fmt.Errorf("download URL host validation failed for %q: %w", downloadURL, err)
+	if parsedURL.Host != "api.media.atlassian.com" {
+		err = s.ensureRedirectHostAllowed(parsedURL.Host)
+		if err != nil {
+			return fmt.Errorf("download URL host validation failed for %q: %w", downloadURL, err)
+		}
 	}
 	req, err := client.NewRequest(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
@@ -301,6 +351,55 @@ func (s *Service) DownloadByURL(
 	}
 }
 
+func resolveDownloadURL(baseURL, downloadLink string) (string, error) {
+	parsedBase, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse baseURL %q: %w", baseURL, err)
+	}
+	if strings.HasPrefix(downloadLink, "/") {
+		basePath := strings.TrimSuffix(parsedBase.Path, "/")
+		if !strings.HasSuffix(basePath, "/wiki") {
+			basePath = path.Join(basePath, "wiki")
+		}
+		downloadLink = strings.TrimSuffix(basePath, "/") + downloadLink
+	}
+	parsedDownload, err := parsedBase.Parse(downloadLink)
+	if err != nil {
+		return "", fmt.Errorf("parse attachment download link %q relative to %q: %w", downloadLink, parsedBase.String(), err)
+	}
+	return parsedDownload.String(), nil
+}
+
+func attachmentContainerID(attachment *models.AttachmentSingle) string {
+	if attachment == nil || attachment.PageId == nil {
+		return ""
+	}
+	return *attachment.PageId
+}
+
+func attachmentDownloadAPIURL(baseURL, pageID, attachmentID string) (string, error) {
+	parsedBase, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse baseURL %q: %w", baseURL, err)
+	}
+	parsedBase.Path = strings.TrimSuffix(parsedBase.Path, "/")
+	if !strings.HasSuffix(parsedBase.Path, "/wiki") {
+		parsedBase.Path = path.Join(parsedBase.Path, "wiki")
+	}
+	parsedBase.Path = path.Join(
+		parsedBase.Path,
+		"rest",
+		"api",
+		"content",
+		pageID,
+		"child",
+		"attachment",
+		attachmentID,
+		"download",
+	)
+	return parsedBase.String(), nil
+}
+
 func (s *Service) downloadFromRedirect(
 	ctx context.Context,
 	resp *http.Response,
@@ -319,9 +418,11 @@ func (s *Service) downloadFromRedirect(
 		return fmt.Errorf("parse Location header %q relative to %q: %w", location, parsedBase.String(), err)
 	}
 	resolved := downloadURL.String()
-	err = s.ensureRedirectHostAllowed(downloadURL.Host)
-	if err != nil {
-		return fmt.Errorf("redirect download URL host validation failed for %q: %w", resolved, err)
+	if downloadURL.Host != parsedBase.Host && downloadURL.Host != "api.media.atlassian.com" {
+		err = s.ensureRedirectHostAllowed(downloadURL.Host)
+		if err != nil {
+			return fmt.Errorf("redirect download URL host validation failed for %q: %w", resolved, err)
+		}
 	}
 	err = s.DownloadByURL(ctx, resolved, writer)
 	if err != nil {

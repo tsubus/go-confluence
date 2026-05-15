@@ -105,7 +105,7 @@ The [`AttachmentService`](attachment/service.go:1) provides two ways to download
 
 ### Download by attachment ID
 
-[`AttachmentService.Download`](attachment/service.go:224) fetches the attachment metadata, resolves the download link, and streams the file to an [`io.Writer`](attachment/service.go:228):
+[`AttachmentService.Download`](attachment/service.go:224) fetches attachment metadata, requests Confluence's supported attachment download endpoint, follows the returned media redirect, and streams the file to an [`io.Writer`](attachment/service.go:228):
 
 ```go
 file, err := os.Create("attachment.zip")
@@ -129,7 +129,7 @@ err = client.Attachment().Download(ctx, "att-123456", params, file)
 
 ### Download by direct URL
 
-If you already have a download URL (for example, from a page or space response), use [`AttachmentService.DownloadByURL`](attachment/service.go:242):
+If you already have an absolute download URL, use [`AttachmentService.DownloadByURL`](attachment/service.go:271). Prefer `Download` for Confluence Cloud attachment IDs because it uses the supported download endpoint before following Atlassian's media redirect:
 
 ```go
 err = client.Attachment().DownloadByURL(ctx, "https://wiki.example.com/download/attachments/123/file.zip", file)
@@ -228,3 +228,4 @@ CONFLUENCE_PAGE_ID=123456789
 CONFLUENCE_SPACE_ID=987654321
 CONFLUENCE_ATTACHMENT_ID=attachment-id
 ```
+

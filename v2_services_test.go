@@ -33,6 +33,23 @@ type recordedRequest struct {
 	handlerErr  error
 }
 
+type failingWriter struct {
+	buf       bytes.Buffer
+	failAfter int
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	remaining := w.failAfter - w.buf.Len()
+	if remaining <= 0 {
+		return 0, io.ErrShortWrite
+	}
+	if len(p) > remaining {
+		_, _ = w.buf.Write(p[:remaining])
+		return remaining, io.ErrShortWrite
+	}
+	return w.buf.Write(p)
+}
+
 type serverCase struct {
 	method      string
 	path        string
@@ -1264,7 +1281,10 @@ func TestAttachmentService_Download(t *testing.T) {
 			case "/wiki/api/v2/attachments/att123":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"id":"att123","downloadLink":"` + server.URL + `/download/att123"}`))
+				_, _ = w.Write([]byte(`{"id":"att123","pageId":"page123","downloadLink":"` + server.URL + `/download/att123"}`))
+			case "/wiki/rest/api/content/page123/child/attachment/att123/download":
+				w.Header().Set("Location", server.URL+"/download/att123")
+				w.WriteHeader(http.StatusFound)
 			case "/download/att123":
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte("file content"))
@@ -1282,6 +1302,67 @@ func TestAttachmentService_Download(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "file content", buf.String())
 		require.Equal(t, http.MethodGet, record.method)
+	})
+
+	t.Run("download by id resolves relative link fallback", func(t *testing.T) {
+		var record recordedRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			record.method = r.Method
+			record.path = r.URL.Path
+
+			switch r.URL.Path {
+			case "/wiki/api/v2/attachments/att123":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"att123","downloadLink":"/download/attachments/327880/file.txt?version=1"}`))
+			case "/wiki/download/attachments/327880/file.txt":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("relative content"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
+		require.NoError(t, err)
+		require.Equal(t, "relative content", buf.String())
+		require.Equal(t, http.MethodGet, record.method)
+		require.Equal(t, "/wiki/download/attachments/327880/file.txt", record.path)
+	})
+
+	t.Run("download by id does not fallback after partial API stream", func(t *testing.T) {
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/wiki/api/v2/attachments/att123":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"att123","pageId":"page123","downloadLink":"` + server.URL + `/download/att123"}`))
+			case "/wiki/rest/api/content/page123/child/attachment/att123/download":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("api content"))
+			case "/download/att123":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("legacy content"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		writer := &failingWriter{failAfter: 4}
+		err = client.Attachment().Download(context.Background(), "att123", nil, writer)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "stream download response")
+		require.Equal(t, "api ", writer.buf.String())
 	})
 
 	t.Run("download by id missing link", func(t *testing.T) {
