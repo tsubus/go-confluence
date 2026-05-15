@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/umats/go-confluence/attachment"
 	"github.com/umats/go-confluence/internal/transport"
 )
 
@@ -59,4 +60,17 @@ func DecodeResponseForTest(client *Client, response *http.Response, out any) (tr
 		return apiErr, fmt.Errorf("decode response: %w", err)
 	}
 	return apiErr, fmt.Errorf("decode response: %w", err)
+}
+
+// ResetAttachmentDownloadByURLDeprecationWarningForTest resets the once-only deprecation warning for tests.
+func ResetAttachmentDownloadByURLDeprecationWarningForTest() {
+	attachment.ResetDeprecatedDownloadByURLWarningForTest()
+}
+
+// NewAttachmentDownloadByURLDeprecationWarningForTest exposes warning construction for external tests.
+func NewAttachmentDownloadByURLDeprecationWarningForTest() interface {
+	ResetForTest()
+	Warn()
+} {
+	return attachment.NewDownloadByURLDeprecationWarningForTest()
 }

@@ -318,6 +318,8 @@ type AttachmentReader interface {
 		params *params.AttachmentGetParams,
 		writer io.Writer,
 	) error
+	// Deprecated: DownloadByURL streams an attachment from a direct download URL.
+	// Prefer Download for Confluence attachment IDs.
 	DownloadByURL(
 		ctx context.Context,
 		downloadURL string,

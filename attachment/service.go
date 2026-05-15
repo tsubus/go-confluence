@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/umats/go-confluence/internal/transport"
 	"github.com/umats/go-confluence/models"
@@ -223,7 +225,8 @@ func (s *Service) DeleteContentProperty(
 	return nil
 }
 
-// Download fetches attachment metadata and streams the file to writer.
+// Download fetches attachment metadata and streams the file through
+// Confluence's supported attachment download endpoint.
 func (s *Service) Download(
 	ctx context.Context,
 	id string,
@@ -234,42 +237,33 @@ func (s *Service) Download(
 	if err != nil {
 		return fmt.Errorf("fetch attachment metadata: %w", err)
 	}
-	pageID := attachmentContainerID(attachment)
-	if pageID != "" {
-		counting := countingWriter{writer: writer}
-		err = s.downloadByAPI(ctx, pageID, attachment.Id, &counting)
-		if err == nil {
-			return nil
-		}
-		if counting.written > 0 {
-			return err
-		}
+	containerID := attachmentContainerID(attachment)
+	if containerID == "" {
+		return errors.New("attachment has no container id")
 	}
-	if attachment.DownloadLink == nil || *attachment.DownloadLink == "" {
-		return errors.New("attachment has no download link")
-	}
-	downloadURL, err := resolveDownloadURL(s.v2.Client().BaseURL, *attachment.DownloadLink)
+	counting := countingWriter{writer: writer}
+	err = s.downloadByAPI(ctx, containerID, attachment.Id, &counting)
 	if err != nil {
 		return err
 	}
-	return s.DownloadByURL(ctx, downloadURL, writer)
+	return nil
 }
 
 // downloadByAPI streams an attachment through Confluence's supported download endpoint.
 func (s *Service) downloadByAPI(
 	ctx context.Context,
-	pageID string,
+	containerID string,
 	attachmentID *string,
 	writer io.Writer,
 ) error {
 	if attachmentID == nil || *attachmentID == "" {
 		return errors.New("attachment has no id")
 	}
-	downloadURL, err := attachmentDownloadAPIURL(s.v2.Client().BaseURL, pageID, *attachmentID)
+	downloadURL, err := attachmentDownloadAPIURL(s.v2.Client().BaseURL, containerID, *attachmentID)
 	if err != nil {
 		return err
 	}
-	return s.DownloadByURL(ctx, downloadURL, writer)
+	return s.downloadURL(ctx, downloadURL, writer, false)
 }
 
 type countingWriter struct {
@@ -286,12 +280,25 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// DownloadByURL streams an attachment from a direct download URL to writer.
+// Deprecated: DownloadByURL streams an attachment from a direct download URL to writer.
+// Prefer Download for Confluence attachment IDs.
 func (s *Service) DownloadByURL(
 	ctx context.Context,
 	downloadURL string,
 	writer io.Writer,
 ) error {
+	return s.downloadURL(ctx, downloadURL, writer, true)
+}
+
+func (s *Service) downloadURL(
+	ctx context.Context,
+	downloadURL string,
+	writer io.Writer,
+	warnDeprecated bool,
+) error {
+	if warnDeprecated {
+		warnDeprecatedDownloadByURL()
+	}
 	client := s.v2.Client()
 	if client == nil {
 		return errors.New("transport client is required")
@@ -351,30 +358,20 @@ func (s *Service) DownloadByURL(
 	}
 }
 
-func resolveDownloadURL(baseURL, downloadLink string) (string, error) {
-	parsedBase, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("parse baseURL %q: %w", baseURL, err)
-	}
-	if strings.HasPrefix(downloadLink, "/") {
-		basePath := strings.TrimSuffix(parsedBase.Path, "/")
-		if !strings.HasSuffix(basePath, "/wiki") {
-			basePath = path.Join(basePath, "wiki")
-		}
-		downloadLink = strings.TrimSuffix(basePath, "/") + downloadLink
-	}
-	parsedDownload, err := parsedBase.Parse(downloadLink)
-	if err != nil {
-		return "", fmt.Errorf("parse attachment download link %q relative to %q: %w", downloadLink, parsedBase.String(), err)
-	}
-	return parsedDownload.String(), nil
-}
-
 func attachmentContainerID(attachment *models.AttachmentSingle) string {
-	if attachment == nil || attachment.PageId == nil {
+	if attachment == nil {
 		return ""
 	}
-	return *attachment.PageId
+	if attachment.PageId != nil && *attachment.PageId != "" {
+		return *attachment.PageId
+	}
+	if attachment.BlogPostId != nil && *attachment.BlogPostId != "" {
+		return *attachment.BlogPostId
+	}
+	if attachment.CustomContentId != nil && *attachment.CustomContentId != "" {
+		return *attachment.CustomContentId
+	}
+	return ""
 }
 
 func attachmentDownloadAPIURL(baseURL, pageID, attachmentID string) (string, error) {
@@ -424,7 +421,7 @@ func (s *Service) downloadFromRedirect(
 			return fmt.Errorf("redirect download URL host validation failed for %q: %w", resolved, err)
 		}
 	}
-	err = s.DownloadByURL(ctx, resolved, writer)
+	err = s.downloadURL(ctx, resolved, writer, false)
 	if err != nil {
 		return fmt.Errorf("redirected download failed for %q: %w", resolved, err)
 	}
@@ -451,4 +448,72 @@ func responseURL(resp *http.Response, fallback string) string {
 		return resp.Request.URL.String()
 	}
 	return fallback
+}
+
+type deprecationWarning struct {
+	logger *slog.Logger
+	m      sync.Mutex
+	once   func()
+}
+
+func newDeprecationWarning(logger *slog.Logger) *deprecationWarning {
+	warning := &deprecationWarning{logger: logger}
+	warning.resetLocked()
+
+	return warning
+}
+
+func (w *deprecationWarning) Warn() {
+	w.m.Lock()
+	once := w.once
+	w.m.Unlock()
+	once()
+}
+
+func (w *deprecationWarning) ResetForTest() {
+	w.m.Lock()
+	defer w.m.Unlock()
+
+	w.resetLocked()
+}
+
+func (w *deprecationWarning) resetLocked() {
+	w.once = sync.OnceFunc(func() {
+		w.logger.Warn(
+			"confluence: AttachmentService.DownloadByURL is deprecated and will be removed in a future release",
+			"replacement",
+			"AttachmentService.Download",
+		)
+	})
+}
+
+func warnDeprecatedDownloadByURL() {
+	defaultDownloadByURLDeprecationWarning().Warn()
+}
+
+func defaultDownloadByURLDeprecationWarning() *deprecationWarning {
+	return defaultDownloadByURLDeprecationWarningState().warning
+}
+
+type downloadByURLDeprecationWarningState struct {
+	warning *deprecationWarning
+}
+
+func defaultDownloadByURLDeprecationWarningState() *downloadByURLDeprecationWarningState {
+	return &downloadByURLDeprecationWarningState{
+		warning: newDeprecationWarning(slog.Default()),
+	}
+}
+
+// ResetDeprecatedDownloadByURLWarningForTest resets the once-only deprecation warning for tests.
+func ResetDeprecatedDownloadByURLWarningForTest() {
+	defaultDownloadByURLDeprecationWarning().ResetForTest()
+}
+
+// NewDownloadByURLDeprecationWarningForTest exposes warning construction for tests.
+func NewDownloadByURLDeprecationWarningForTest() interface {
+	ResetForTest()
+	Warn()
+} {
+	return newDeprecationWarning(slog.Default())
 }

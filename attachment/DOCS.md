@@ -8,6 +8,11 @@
 
 ## Index
 
+- [func NewDownloadByURLDeprecationWarningForTest\(\) interface \{
+    ResetForTest\(\)
+    Warn\(\)
+\}](<#NewDownloadByURLDeprecationWarningForTest>)
+- [func ResetDeprecatedDownloadByURLWarningForTest\(\)](<#ResetDeprecatedDownloadByURLWarningForTest>)
 - [type Service](<#Service>)
   - [func NewService\(client \*transport.Client\) \*Service](<#NewService>)
   - [func \(s \*Service\) CreateContentProperty\(ctx context.Context, id string, request models.ContentPropertyCreateRequest\) \(\*models.ContentProperty, error\)](<#Service.CreateContentProperty>)
@@ -26,6 +31,23 @@
   - [func \(s \*Service\) List\(ctx context.Context, queryParams \*params.AttachmentListParams\) \(\*params.MultiEntityResultAttachmentBulk, error\)](<#Service.List>)
   - [func \(s \*Service\) UpdateContentProperty\(ctx context.Context, id string, propertyID int64, request models.ContentPropertyUpdateRequest\) \(\*models.ContentProperty, error\)](<#Service.UpdateContentProperty>)
 
+
+<a name="NewDownloadByURLDeprecationWarningForTest"></a>
+## func NewDownloadByURLDeprecationWarningForTest
+
+	func NewDownloadByURLDeprecationWarningForTest() interface {
+	    ResetForTest()
+	    Warn()
+	}
+
+NewDownloadByURLDeprecationWarningForTest exposes warning construction for tests.
+
+<a name="ResetDeprecatedDownloadByURLWarningForTest"></a>
+## func ResetDeprecatedDownloadByURLWarningForTest
+
+	func ResetDeprecatedDownloadByURLWarningForTest()
+
+ResetDeprecatedDownloadByURLWarningForTest resets the once\-only deprecation warning for tests.
 
 <a name="Service"></a>
 ## type Service
@@ -69,14 +91,14 @@ Service provides attachment REST v2 operations.
 
 	func (s *Service) Download(ctx context.Context, id string, queryParams *params.AttachmentGetParams, writer io.Writer) error
 
-Download fetches attachment metadata and streams the file to writer.
+Download fetches attachment metadata and streams the file through Confluence's supported attachment download endpoint.
 
 <a name="Service.DownloadByURL"></a>
 ### func \(\*Service\) DownloadByURL
 
 	func (s *Service) DownloadByURL(ctx context.Context, downloadURL string, writer io.Writer) error
 
-DownloadByURL streams an attachment from a direct download URL to writer.
+Deprecated: DownloadByURL streams an attachment from a direct download URL to writer. Prefer Download for Confluence attachment IDs.
 
 <a name="Service.Get"></a>
 ### func \(\*Service\) Get

@@ -16,7 +16,12 @@ Export supports both Confluence Server/Data Center and Confluence Cloud: Server/
 - [func BuildQueryForTest\(params any\) \(url.Values, error\)](<#BuildQueryForTest>)
 - [func DecodeResponseForTest\(client \*Client, response \*http.Response, out any\) \(transport.APIError, error\)](<#DecodeResponseForTest>)
 - [func DoJSONForTest\(ctx context.Context, client \*Client, method string, path string, query url.Values, request any, response any\) error](<#DoJSONForTest>)
+- [func NewAttachmentDownloadByURLDeprecationWarningForTest\(\) interface \{
+    ResetForTest\(\)
+    Warn\(\)
+\}](<#NewAttachmentDownloadByURLDeprecationWarningForTest>)
 - [func NewURLForTest\(client \*Client, path string\) \(string, error\)](<#NewURLForTest>)
+- [func ResetAttachmentDownloadByURLDeprecationWarningForTest\(\)](<#ResetAttachmentDownloadByURLDeprecationWarningForTest>)
 - [type AttachmentCommentsParams](<#AttachmentCommentsParams>)
 - [type AttachmentGetParams](<#AttachmentGetParams>)
 - [type AttachmentLabelsParams](<#AttachmentLabelsParams>)
@@ -159,12 +164,29 @@ DecodeResponseForTest exposes v2 client response decoding for external tests.
 
 DoJSONForTest exposes v2 client JSON request flow for external tests.
 
+<a name="NewAttachmentDownloadByURLDeprecationWarningForTest"></a>
+## func NewAttachmentDownloadByURLDeprecationWarningForTest
+
+	func NewAttachmentDownloadByURLDeprecationWarningForTest() interface {
+	    ResetForTest()
+	    Warn()
+	}
+
+NewAttachmentDownloadByURLDeprecationWarningForTest exposes warning construction for external tests.
+
 <a name="NewURLForTest"></a>
 ## func NewURLForTest
 
 	func NewURLForTest(client *Client, path string) (string, error)
 
 NewURLForTest exposes v2 client URL construction for external tests.
+
+<a name="ResetAttachmentDownloadByURLDeprecationWarningForTest"></a>
+## func ResetAttachmentDownloadByURLDeprecationWarningForTest
+
+	func ResetAttachmentDownloadByURLDeprecationWarningForTest()
+
+ResetAttachmentDownloadByURLDeprecationWarningForTest resets the once\-only deprecation warning for tests.
 
 <a name="AttachmentCommentsParams"></a>
 ## type AttachmentCommentsParams
@@ -246,6 +268,8 @@ AttachmentReader defines read\-only attachment operations.
 	        params *params.AttachmentGetParams,
 	        writer io.Writer,
 	    ) error
+	    // Deprecated: DownloadByURL streams an attachment from a direct download URL.
+	    // Prefer Download for Confluence attachment IDs.
 	    DownloadByURL(
 	        ctx context.Context,
 	        downloadURL string,

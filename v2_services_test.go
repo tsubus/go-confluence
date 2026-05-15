@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1304,20 +1305,20 @@ func TestAttachmentService_Download(t *testing.T) {
 		require.Equal(t, http.MethodGet, record.method)
 	})
 
-	t.Run("download by id resolves relative link fallback", func(t *testing.T) {
-		var record recordedRequest
+	t.Run("download by id returns api failure without download link fallback", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			record.method = r.Method
-			record.path = r.URL.Path
-
 			switch r.URL.Path {
 			case "/wiki/api/v2/attachments/att123":
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"id":"att123","downloadLink":"/download/attachments/327880/file.txt?version=1"}`))
+				_, _ = w.Write([]byte(
+					`{"id":"att123","pageId":"page123","downloadLink":"/download/attachments/327880/file.txt?version=1"}`,
+				))
+			case "/wiki/rest/api/content/page123/child/attachment/att123/download":
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("api failed"))
 			case "/wiki/download/attachments/327880/file.txt":
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte("relative content"))
+				t.Fatalf("unexpected fallback request: %s", r.URL.Path)
 			default:
 				w.WriteHeader(http.StatusNotFound)
 			}
@@ -1329,10 +1330,10 @@ func TestAttachmentService_Download(t *testing.T) {
 
 		var buf bytes.Buffer
 		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
-		require.NoError(t, err)
-		require.Equal(t, "relative content", buf.String())
-		require.Equal(t, http.MethodGet, record.method)
-		require.Equal(t, "/wiki/download/attachments/327880/file.txt", record.path)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "unexpected download status code 500")
+		require.ErrorContains(t, err, "/wiki/rest/api/content/page123/child/attachment/att123/download")
+		require.Empty(t, buf.String())
 	})
 
 	t.Run("download by id does not fallback after partial API stream", func(t *testing.T) {
@@ -1365,11 +1366,11 @@ func TestAttachmentService_Download(t *testing.T) {
 		require.Equal(t, "api ", writer.buf.String())
 	})
 
-	t.Run("download by id missing link", func(t *testing.T) {
+	t.Run("download by id missing container id", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"id":"att123"}`))
+			_, _ = w.Write([]byte(`{"id":"att123","downloadLink":"/download/attachments/327880/file.txt?version=1"}`))
 		}))
 		defer server.Close()
 
@@ -1379,7 +1380,41 @@ func TestAttachmentService_Download(t *testing.T) {
 		var buf bytes.Buffer
 		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
 		require.Error(t, err)
-		require.ErrorContains(t, err, "no download link")
+		require.ErrorContains(t, err, "attachment has no container id")
+	})
+
+	t.Run("download by id uses blog post container id", func(t *testing.T) {
+		var record recordedRequest
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			record.method = r.Method
+			record.path = r.URL.Path
+			switch r.URL.Path {
+			case "/wiki/api/v2/attachments/att123":
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"att123","blogPostId":"blog123","downloadLink":"` + server.URL + `/download/att123"}`))
+			case "/wiki/rest/api/content/blog123/child/attachment/att123/download":
+				w.Header().Set("Location", server.URL+"/download/att123")
+				w.WriteHeader(http.StatusFound)
+			case "/download/att123":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("blog content"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
+		require.NoError(t, err)
+
+		var buf bytes.Buffer
+		err = client.Attachment().Download(context.Background(), "att123", nil, &buf)
+		require.NoError(t, err)
+		require.Equal(t, "blog content", buf.String())
+		require.Equal(t, http.MethodGet, record.method)
+		require.Equal(t, "/download/att123", record.path)
 	})
 
 	t.Run("download by url direct ok", func(t *testing.T) {
@@ -1396,6 +1431,30 @@ func TestAttachmentService_Download(t *testing.T) {
 		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
 		require.NoError(t, err)
 		require.Equal(t, "direct data", buf.String())
+	})
+
+	t.Run("download by url emits deprecation warning once", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("direct data"))
+		}))
+		defer server.Close()
+
+		logger := slog.Default()
+		var logs bytes.Buffer
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		defer slog.SetDefault(logger)
+
+		warning := confluence.NewAttachmentDownloadByURLDeprecationWarningForTest()
+		warning.ResetForTest()
+
+		for range 2 {
+			warning.Warn()
+		}
+
+		output := logs.String()
+		require.Contains(t, output, "AttachmentService.DownloadByURL is deprecated")
+		require.Equal(t, 1, strings.Count(output, "AttachmentService.DownloadByURL is deprecated"))
 	})
 
 	t.Run("download by url follows allowed redirect", func(t *testing.T) {

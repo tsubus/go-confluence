@@ -123,13 +123,14 @@ if err != nil {
 You can also pass query parameters (for example, to request a specific version):
 
 ```go
-params := &confluence.AttachmentGetParams{Version: 2}
+version := 2
+params := &confluence.AttachmentGetParams{Version: &version}
 err = client.Attachment().Download(ctx, "att-123456", params, file)
 ```
 
 ### Download by direct URL
 
-If you already have an absolute download URL, use [`AttachmentService.DownloadByURL`](attachment/service.go:271). Prefer `Download` for Confluence Cloud attachment IDs because it uses the supported download endpoint before following Atlassian's media redirect:
+[`AttachmentService.DownloadByURL`](attachment/service.go:284) is deprecated and is no longer used as a fallback by [`AttachmentService.Download`](attachment/service.go:229). Prefer `Download` for Confluence attachment IDs; use `DownloadByURL` only when you already have a caller-supplied absolute download URL.
 
 ```go
 err = client.Attachment().DownloadByURL(ctx, "https://wiki.example.com/download/attachments/123/file.zip", file)
