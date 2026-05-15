@@ -140,6 +140,7 @@ func TestExportPage(t *testing.T) {
 		want    []byte
 		wantErr bool
 		errMsg  string
+		wantURL bool
 	}{
 		{
 			name:    "successful export",
@@ -165,12 +166,14 @@ func TestExportPage(t *testing.T) {
 			pageID:  "server-error",
 			wantErr: true,
 			errMsg:  "unexpected export status code 500",
+			wantURL: true,
 		},
 		{
 			name:    "missing location header",
 			pageID:  "no-location",
 			wantErr: true,
 			errMsg:  "export response missing Location header",
+			wantURL: true,
 		},
 	}
 
@@ -184,6 +187,10 @@ func TestExportPage(t *testing.T) {
 				require.Error(t, err)
 				if tt.errMsg != "" {
 					require.ErrorContains(t, err, tt.errMsg)
+				}
+				if tt.wantURL {
+					require.Contains(t, err.Error(), server.URL)
+					require.Contains(t, err.Error(), "pageId="+tt.pageID)
 				}
 				return
 			}

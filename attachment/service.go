@@ -250,41 +250,54 @@ func (s *Service) DownloadByURL(
 	}
 	parsedURL, err := url.Parse(downloadURL)
 	if err != nil {
-		return fmt.Errorf("parse download URL: %w", err)
+		return fmt.Errorf("parse download URL %q: %w", downloadURL, err)
 	}
 	if parsedURL.Host == "" {
-		return errors.New("download URL must include a host")
+		return fmt.Errorf("download URL %q must include a host", downloadURL)
 	}
 	err = s.ensureRedirectHostAllowed(parsedURL.Host)
 	if err != nil {
-		return fmt.Errorf("download URL host validation failed: %w", err)
+		return fmt.Errorf("download URL host validation failed for %q: %w", downloadURL, err)
 	}
 	req, err := client.NewRequest(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return fmt.Errorf("create download request: %w", err)
+		return fmt.Errorf("create download request for %q: %w", downloadURL, err)
 	}
 	resp, err := client.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("execute download request: %w", err)
+		return fmt.Errorf("execute download request for %q: %w", downloadURL, err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	closeBody := func() error {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return fmt.Errorf("close download response body for %q: %w", downloadURL, closeErr)
+		}
+		return nil
+	}
 	switch resp.StatusCode {
 	case http.StatusFound:
-		return s.downloadFromRedirect(ctx, resp, writer)
+		err = s.downloadFromRedirect(ctx, resp, writer)
+		if closeErr := closeBody(); err == nil && closeErr != nil {
+			return closeErr
+		}
+		return err
 	case http.StatusOK:
 		_, err = io.Copy(writer, resp.Body)
+		if closeErr := closeBody(); err == nil && closeErr != nil {
+			return closeErr
+		}
 		if err != nil {
-			return fmt.Errorf("stream download response: %w", err)
+			return fmt.Errorf("stream download response from %q: %w", downloadURL, err)
 		}
 		return nil
 	default:
 		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("read download error response: %w", readErr)
+		if closeErr := closeBody(); readErr == nil && closeErr != nil {
+			return closeErr
 		}
-		return fmt.Errorf("unexpected download status code %d: %s", resp.StatusCode, string(body))
+		if readErr != nil {
+			return fmt.Errorf("read download error response from %q: %w", downloadURL, readErr)
+		}
+		return fmt.Errorf("unexpected download status code %d for %q: %s", resp.StatusCode, downloadURL, string(body))
 	}
 }
 
@@ -295,21 +308,26 @@ func (s *Service) downloadFromRedirect(
 ) error {
 	location := resp.Header.Get("Location")
 	if location == "" {
-		return errors.New("download response missing Location header")
+		return fmt.Errorf("download response from %q missing Location header", responseURL(resp, s.v2.Client().BaseURL))
 	}
 	parsedBase, err := url.Parse(s.v2.Client().BaseURL)
 	if err != nil {
-		return fmt.Errorf("parse baseURL: %w", err)
+		return fmt.Errorf("parse baseURL %q: %w", s.v2.Client().BaseURL, err)
 	}
 	downloadURL, err := parsedBase.Parse(location)
 	if err != nil {
-		return fmt.Errorf("parse Location header %q: %w", location, err)
+		return fmt.Errorf("parse Location header %q relative to %q: %w", location, parsedBase.String(), err)
 	}
+	resolved := downloadURL.String()
 	err = s.ensureRedirectHostAllowed(downloadURL.Host)
 	if err != nil {
-		return err
+		return fmt.Errorf("redirect download URL host validation failed for %q: %w", resolved, err)
 	}
-	return s.DownloadByURL(ctx, downloadURL.String(), writer)
+	err = s.DownloadByURL(ctx, resolved, writer)
+	if err != nil {
+		return fmt.Errorf("redirected download failed for %q: %w", resolved, err)
+	}
+	return nil
 }
 
 func (s *Service) ensureRedirectHostAllowed(host string) error {
@@ -325,4 +343,11 @@ func (s *Service) ensureRedirectHostAllowed(host string) error {
 		return fmt.Errorf("redirect host %q is not allowed", host)
 	}
 	return nil
+}
+
+func responseURL(resp *http.Response, fallback string) string {
+	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
+		return resp.Request.URL.String()
+	}
+	return fallback
 }

@@ -6,3 +6,4 @@
 plans/
 .env
 openapi.json
+.omp/

@@ -45,7 +45,7 @@ func (e *exporter) PageTo(ctx context.Context, pageID string, writer io.Writer) 
 
 	req, err := e.client.NewRequest(ctx, http.MethodGet, exportURL, nil)
 	if err != nil {
-		return fmt.Errorf("create export request: %w", err)
+		return fmt.Errorf("create export request for %q: %w", exportURL, err)
 	}
 
 	req.Header.Set("X-Atlassian-Token", "no-check")
@@ -53,11 +53,11 @@ func (e *exporter) PageTo(ctx context.Context, pageID string, writer io.Writer) 
 
 	resp, err := e.client.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("execute export request: %w", err)
+		return fmt.Errorf("execute export request for %q: %w", exportURL, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close export response body: %w", closeErr)
+			err = fmt.Errorf("close export response body for %q: %w", exportURL, closeErr)
 		}
 	}()
 
@@ -69,8 +69,8 @@ func (e *exporter) PageTo(ctx context.Context, pageID string, writer io.Writer) 
 	default:
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return fmt.Errorf("read export error response: %w", readErr)
+			return fmt.Errorf("read export error response from %q: %w", exportURL, readErr)
 		}
-		return fmt.Errorf("unexpected export status code %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("unexpected export status code %d for %q: %s", resp.StatusCode, exportURL, string(body))
 	}
 }

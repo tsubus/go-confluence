@@ -23,11 +23,13 @@ func TestDownloadFromRedirect(t *testing.T) {
 		client         *Client
 		wantErr        error
 		wantErrText    string
+		wantURL        string
 	}{
 		{
 			name:    "missing location",
 			baseURL: "http://localhost:8080",
 			wantErr: export.ErrMissingLocation,
+			wantURL: "http://localhost:8080",
 		},
 		{
 			name:           "invalid base URL",
@@ -52,6 +54,7 @@ func TestDownloadFromRedirect(t *testing.T) {
 				},
 			},
 			wantErrText: "not allowed",
+			wantURL:     "http://evil.example.com/download/file.pdf",
 		},
 		{
 			name:           "redirect allow list empty",
@@ -59,20 +62,13 @@ func TestDownloadFromRedirect(t *testing.T) {
 			locationHeader: "http://localhost:8080/download/file.pdf",
 			client:         &Client{baseURL: "http://localhost:8080"},
 			wantErrText:    "allowed redirect host list is empty",
+			wantURL:        "http://localhost:8080/download/file.pdf",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := tt.client
-			if client == nil {
-				client = &Client{
-					baseURL: tt.baseURL,
-					allowedRedirectHosts: map[string]struct{}{
-						"localhost:8080": {},
-					},
-				}
-			}
+			client := downloadFromRedirectTestClient(tt.client, tt.baseURL)
 			resp := &http.Response{Header: http.Header{}}
 			if tt.locationHeader != "" {
 				resp.Header.Set("Location", tt.locationHeader)
@@ -80,25 +76,51 @@ func TestDownloadFromRedirect(t *testing.T) {
 
 			helper := export.NewHelper(newTransportClient(client))
 			err := helper.DownloadFromRedirect(context.Background(), resp, io.Discard)
-			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
-					t.Fatalf("expected error %v, got %v", tt.wantErr, err)
-				}
-				return
-			}
-			if tt.wantErrText != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q", tt.wantErrText)
-				}
-				if !strings.Contains(err.Error(), tt.wantErrText) {
-					t.Fatalf("expected error containing %q, got %q", tt.wantErrText, err.Error())
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("expected no error, got %v", err)
-			}
+			assertDownloadFromRedirectError(t, err, tt.wantErr, tt.wantErrText, tt.wantURL)
 		})
+	}
+}
+
+func downloadFromRedirectTestClient(client *Client, baseURL string) *Client {
+	if client != nil {
+		return client
+	}
+	return &Client{
+		baseURL: baseURL,
+		allowedRedirectHosts: map[string]struct{}{
+			"localhost:8080": {},
+		},
+	}
+}
+
+func assertDownloadFromRedirectError(t *testing.T, err error, wantErr error, wantErrText, wantURL string) {
+	t.Helper()
+	if wantErr != nil {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("expected error %v, got %v", wantErr, err)
+		}
+		assertErrorContainsURL(t, err, wantURL)
+		return
+	}
+	if wantErrText != "" {
+		if err == nil {
+			t.Fatalf("expected error containing %q", wantErrText)
+		}
+		if !strings.Contains(err.Error(), wantErrText) {
+			t.Fatalf("expected error containing %q, got %q", wantErrText, err.Error())
+		}
+		assertErrorContainsURL(t, err, wantURL)
+		return
+	}
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func assertErrorContainsURL(t *testing.T, err error, wantURL string) {
+	t.Helper()
+	if wantURL != "" && !strings.Contains(err.Error(), wantURL) {
+		t.Fatalf("expected error containing URL %q, got %q", wantURL, err.Error())
 	}
 }
 
@@ -143,13 +165,17 @@ func TestDownloadPDF(t *testing.T) {
 				}, nil
 			})}}
 
+			downloadURL := "http://example.com/file.pdf"
 			helper := export.NewHelper(newTransportClient(client))
-			err := helper.DownloadPDF(context.Background(), "http://example.com/file.pdf", tt.writer)
+			err := helper.DownloadPDF(context.Background(), downloadURL, tt.writer)
 			if err == nil {
 				t.Fatalf("expected error containing %q", tt.wantErrText)
 			}
 			if !strings.Contains(err.Error(), tt.wantErrText) {
 				t.Fatalf("expected error containing %q, got %q", tt.wantErrText, err.Error())
+			}
+			if !strings.Contains(err.Error(), downloadURL) {
+				t.Fatalf("expected error containing URL %q, got %q", downloadURL, err.Error())
 			}
 		})
 	}
@@ -231,13 +257,17 @@ func TestFetchProgress(t *testing.T) {
 				}, nil
 			})}}
 
+			pollURL := "http://example.com/progress"
 			helper := export.NewHelper(newTransportClient(client))
-			_, err := helper.FetchProgress(context.Background(), "http://example.com/progress")
+			_, err := helper.FetchProgress(context.Background(), pollURL)
 			if err == nil {
 				t.Fatalf("expected error containing %q", tt.wantErrText)
 			}
 			if !strings.Contains(err.Error(), tt.wantErrText) {
 				t.Fatalf("expected error containing %q, got %q", tt.wantErrText, err.Error())
+			}
+			if !strings.Contains(err.Error(), pollURL) {
+				t.Fatalf("expected error containing URL %q, got %q", pollURL, err.Error())
 			}
 		})
 	}
@@ -286,6 +316,9 @@ func TestPollTaskProgress_ContextCancelled(t *testing.T) {
 	if !strings.Contains(err.Error(), "context cancelled while polling") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if !strings.Contains(err.Error(), "http://example.com/api/v2/pdfexporttask/progress/task-1") {
+		t.Fatalf("expected poll URL in error, got %v", err)
+	}
 }
 
 func TestHandleOKResponse_TaskResultEmpty(t *testing.T) {
@@ -321,6 +354,45 @@ func TestHandleOKResponse_TaskResultEmpty(t *testing.T) {
 	}
 	if !errors.Is(err, export.ErrTaskResultEmpty) {
 		t.Fatalf("expected ErrTaskResultEmpty, got %v", err)
+	}
+	if !strings.Contains(err.Error(), server.URL+"/api/v2/pdfexporttask/progress/task-1") {
+		t.Fatalf("expected poll URL in error, got %v", err)
+	}
+}
+
+func TestHandleOKResponse_TaskResultDownloadFailureIncludesResultURL(t *testing.T) {
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	mux.HandleFunc("/api/v2/pdfexporttask/progress/task-1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"progress":100,"state":"SUCCEEDED","result":"` + server.URL + `/download/file.pdf"}`))
+	})
+	mux.HandleFunc("/download/file.pdf", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	})
+
+	client := &Client{
+		baseURL:      server.URL,
+		httpClient:   server.Client(),
+		pollInterval: 1 * time.Millisecond,
+	}
+	resp := &http.Response{
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(`<meta name="ajs-taskId" content="task-1">`)),
+		StatusCode: http.StatusOK,
+	}
+
+	helper := export.NewHelper(newTransportClient(client))
+	err := helper.HandleOKResponse(context.Background(), resp, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), server.URL+"/download/file.pdf") {
+		t.Fatalf("expected result download URL in error, got %v", err)
 	}
 }
 
@@ -497,6 +569,9 @@ func TestHandleOKResponse_TaskFailed(t *testing.T) {
 	}
 	if !errors.Is(err, export.ErrTaskFailed) {
 		t.Fatalf("expected ErrTaskFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), server.URL+"/api/v2/pdfexporttask/progress/task-fail") {
+		t.Fatalf("expected poll URL in error, got %v", err)
 	}
 }
 

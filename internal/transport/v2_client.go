@@ -74,7 +74,6 @@ func (v *V2Client) newRequest(ctx context.Context, method, url string, body io.R
 }
 
 func (v *V2Client) do(req *http.Request) (*http.Response, error) {
-	//nolint:gosec // Requests are built from the configured base URL and validated paths.
 	resp, err := v.client.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)

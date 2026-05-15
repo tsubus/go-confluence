@@ -81,10 +81,11 @@ func (c *Helper) handleOKResponse(ctx context.Context, resp *http.Response, writ
 	var err error
 
 	contentType := resp.Header.Get("Content-Type")
+	attemptedURL := responseURL(resp, c.client.BaseURL)
 	if strings.Contains(contentType, "application/pdf") {
 		_, err = io.Copy(writer, resp.Body)
 		if err != nil {
-			return fmt.Errorf("stream pdf response body: %w", err)
+			return fmt.Errorf("stream pdf response body from %q: %w", attemptedURL, err)
 		}
 		return nil
 	}
@@ -92,12 +93,12 @@ func (c *Helper) handleOKResponse(ctx context.Context, resp *http.Response, writ
 	// Assume HTML indicating a Cloud background task.
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read export response body: %w", err)
+		return fmt.Errorf("read export response body from %q: %w", attemptedURL, err)
 	}
 
 	taskID, err := extractTaskID(string(body))
 	if err != nil {
-		return fmt.Errorf("extract task ID from HTML: %w", err)
+		return fmt.Errorf("extract task ID from HTML from %q: %w", attemptedURL, err)
 	}
 
 	downloadURL, err := c.pollTaskProgress(ctx, taskID)
@@ -122,7 +123,7 @@ func ExtractTaskIDForTest(html string) (string, error) {
 }
 
 func (c *Helper) pollTaskProgress(ctx context.Context, taskID string) (string, error) {
-	pollURL := fmt.Sprintf("%s/api/v2/pdfexporttask/progress/%s", c.client.BaseURL, url.PathEscape(taskID))
+	pollURL := c.progressURL(taskID)
 
 	pollCtx := ctx
 	var cancel context.CancelFunc
@@ -139,7 +140,7 @@ func (c *Helper) pollTaskProgress(ctx context.Context, taskID string) (string, e
 
 		result, done, err := evaluateProgress(pr)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("evaluate poll response from %q: %w", pollURL, err)
 		}
 		if done {
 			return result, nil
@@ -147,7 +148,7 @@ func (c *Helper) pollTaskProgress(ctx context.Context, taskID string) (string, e
 
 		waitErr := c.waitForNextPoll(pollCtx)
 		if waitErr != nil {
-			return "", fmt.Errorf("poll attempt %d: %w", attempt, waitErr)
+			return "", fmt.Errorf("poll attempt %d for %q: %w", attempt, pollURL, waitErr)
 		}
 	}
 }
@@ -155,35 +156,44 @@ func (c *Helper) pollTaskProgress(ctx context.Context, taskID string) (string, e
 func (c *Helper) fetchProgress(ctx context.Context, pollURL string) (ProgressResponse, error) {
 	req, err := c.client.NewRequest(ctx, http.MethodGet, pollURL, nil)
 	if err != nil {
-		return ProgressResponse{}, fmt.Errorf("create poll request: %w", err)
+		return ProgressResponse{}, fmt.Errorf("create poll request for %q: %w", pollURL, err)
 	}
 
 	resp, err := c.client.HTTPClient.Do(req)
 	if err != nil {
-		return ProgressResponse{}, fmt.Errorf("execute poll request: %w", err)
+		return ProgressResponse{}, fmt.Errorf("execute poll request for %q: %w", pollURL, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
-			err = closeErr
+			err = fmt.Errorf("close poll response body for %q: %w", pollURL, closeErr)
 		}
 	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ProgressResponse{}, fmt.Errorf("read poll response body: %w", err)
+		return ProgressResponse{}, fmt.Errorf("read poll response body from %q: %w", pollURL, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return ProgressResponse{}, fmt.Errorf("unexpected poll status code %d: %s", resp.StatusCode, string(body))
+		return ProgressResponse{}, fmt.Errorf(
+			"unexpected poll status code %d for %q: %s",
+			resp.StatusCode,
+			pollURL,
+			string(body),
+		)
 	}
 
 	var pr ProgressResponse
 	err = json.Unmarshal(body, &pr)
 	if err != nil {
-		return ProgressResponse{}, fmt.Errorf("decode poll response: %w", err)
+		return ProgressResponse{}, fmt.Errorf("decode poll response from %q: %w", pollURL, err)
 	}
 
 	return pr, nil
+}
+
+func (c *Helper) progressURL(taskID string) string {
+	return fmt.Sprintf("%s/api/v2/pdfexporttask/progress/%s", c.client.BaseURL, url.PathEscape(taskID))
 }
 
 func evaluateProgress(pr ProgressResponse) (string, bool, error) {

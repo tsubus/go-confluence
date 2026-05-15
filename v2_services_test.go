@@ -1370,8 +1370,8 @@ func TestAttachmentService_Download(t *testing.T) {
 		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "not allowed")
+		require.ErrorContains(t, err, redirectServer.URL+"/file.bin")
 	})
-
 	t.Run("download by url unexpected status", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -1382,10 +1382,12 @@ func TestAttachmentService_Download(t *testing.T) {
 		client, err := confluence.NewClient(server.URL, confluence.WithBasicAuth("user", "pass"))
 		require.NoError(t, err)
 
+		url := server.URL + "/file.bin"
 		var buf bytes.Buffer
-		err = client.Attachment().DownloadByURL(context.Background(), server.URL+"/file.bin", &buf)
+		err = client.Attachment().DownloadByURL(context.Background(), url, &buf)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "unexpected download status code 500")
+		require.ErrorContains(t, err, url)
 	})
 
 	t.Run("download by url rejects disallowed host", func(t *testing.T) {
@@ -1393,9 +1395,11 @@ func TestAttachmentService_Download(t *testing.T) {
 		require.NoError(t, err)
 
 		var buf bytes.Buffer
-		err = client.Attachment().DownloadByURL(context.Background(), "http://evil.com/file.bin", &buf)
+		url := "http://evil.com/file.bin"
+		err = client.Attachment().DownloadByURL(context.Background(), url, &buf)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "not allowed")
+		require.ErrorContains(t, err, url)
 	})
 }
 
@@ -1408,11 +1412,13 @@ func TestAttachmentService_DownloadByURL_NilClient(t *testing.T) {
 	// Download which calls Get first; when the GET 404s it returns an API error.
 	// This is a smoke test that the code paths compile and behave sanely.
 	var buf bytes.Buffer
+	url := "http://example.com/file.bin"
 	err = client.Attachment().DownloadByURL(
 		context.Background(),
-		"http://example.com/file.bin",
+		url,
 		&buf,
 	)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "unexpected download status code")
+	require.ErrorContains(t, err, url)
 }
