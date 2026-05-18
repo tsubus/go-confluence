@@ -1,9 +1,10 @@
 # go-confluence
 
-A Go client library for [Confluence](https://www.atlassian.com/software/confluence) REST v2 APIs and PDF exports.
+A Go client library for [Confluence](https://www.atlassian.com/software/confluence) REST v2 APIs and PDF export workflows.
 
-- Supports **Confluence Server/Data Center** and **Confluence Cloud** PDF exports.
+- Supports **Confluence Server/Data Center** redirect-based PDF exports and **Confluence Cloud** background export tasks.
 - Provides typed access to REST v2 endpoints for pages, spaces, attachments, and labels.
+- Supports streaming downloads for PDFs and attachments to avoid unnecessary buffering.
 - Ships with auto-generated API reference documentation (`DOCS.md`) in every package.
 
 ## Installation
@@ -43,19 +44,55 @@ func main() {
         log.Fatalf("create client: %v", err)
     }
 
-    // Export a page by ID into memory.
-    pdf, err := client.Export().Page(ctx, "123456789")
+    page, err := client.Page().Get(ctx, "123456789", nil)
     if err != nil {
-        log.Fatalf("export page: %v", err)
+        log.Fatalf("get page: %v", err)
     }
 
-    if err := os.WriteFile("page.pdf", pdf, 0o644); err != nil {
-        log.Fatalf("write file: %v", err)
+    fmt.Printf("Loaded page %q\n", page.Title)
+
+    file, err := os.Create("page.pdf")
+    if err != nil {
+        log.Fatalf("create file: %v", err)
+    }
+    defer file.Close()
+
+    if err := client.Export().PageTo(ctx, "123456789", file); err != nil {
+        log.Fatalf("export page: %v", err)
     }
 
     fmt.Println("PDF downloaded successfully")
 }
 ```
+
+## Creating a client
+
+[`NewClient`](client.go:148) validates the base URL, disables automatic redirect following so downloads can be checked explicitly, and returns service accessors for pages, spaces, attachments, labels, and export workflows.
+
+```go
+client, err := confluence.NewClient(
+    "https://wiki.example.com",
+    confluence.WithBasicAuth("username", "password-or-api-token"),
+    confluence.WithRequireHTTPS(),
+    confluence.WithAllowedRedirectHosts("downloads.example.com"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Client options
+
+| Option | Description |
+|--------|-------------|
+| [`WithBasicAuth(username, password)`](client.go:57) | Sets username and password (or API token) for HTTP Basic Auth. |
+| [`WithHTTPClient(hc)`](client.go:66) | Replaces the default `http.Client`. |
+| [`WithPollInterval(d)`](client.go:77) | Sets how often to poll a Cloud export task (default: 3s). |
+| [`WithPollTimeout(d)`](client.go:88) | Sets the maximum time to wait for a Cloud export task. |
+| [`WithTimeout(d)`](client.go:99) | Sets the HTTP request timeout. |
+| [`WithRequireHTTPS()`](client.go:110) | Enforces that `baseURL` uses the `https` scheme. |
+| [`WithAllowedRedirectHosts(hosts...)`](client.go:118) | Allows downloads to follow redirects only to the base host plus these extra hosts. |
+| [`WithAllowCrossHostContentURL()`](client.go:140) | Allows custom content URLs to point at a host different from the configured base URL. |
 
 ## Exporting pages as PDF
 
@@ -76,7 +113,7 @@ if err != nil {
 
 ### Stream to a writer
 
-If you want to stream the PDF directly to a file or another [`io.Writer`](export/service.go:25) without buffering it in memory, use [`ExportService.PageTo`](export/service.go:25):
+If you want to stream the PDF directly to a file or another `io.Writer` without buffering it in memory, use [`ExportService.PageTo`](export/service.go:25):
 
 ```go
 file, err := os.Create("page.pdf")
@@ -91,21 +128,17 @@ if err != nil {
 }
 ```
 
-### Export options
+### Export error behavior
 
-| Option | Description |
-|--------|-------------|
-| [`WithPollInterval(d)`](client.go:82) | How often to poll a Cloud export task (default: 3s). |
-| [`WithPollTimeout(d)`](client.go:93) | Maximum time to wait for a Cloud export task. |
-| [`WithAllowedRedirectHosts(hosts...)`](client.go:123) | Limits export download redirects to the allowed hosts. |
+Export errors include the full URL the client attempted to access during request creation, task polling, redirect handling, or PDF download. Sentinel errors are preserved, so callers can still use `errors.Is` with [`ErrMissingLocation`](client.go:25), [`ErrTaskFailed`](client.go:29), [`ErrTaskResultEmpty`](client.go:31), and [`ErrTaskIDNotFound`](client.go:33).
 
 ## Downloading attachments
 
-The [`AttachmentService`](attachment/service.go:1) provides two ways to download attachment files:
+The [`AttachmentService`](attachment/service.go:1) supports both typed REST v2 attachment operations and streaming attachment downloads.
 
 ### Download by attachment ID
 
-[`AttachmentService.Download`](attachment/service.go:224) fetches attachment metadata, requests Confluence's supported attachment download endpoint, follows the returned media redirect, and streams the file to an [`io.Writer`](attachment/service.go:228):
+[`AttachmentService.Download`](attachment/service.go:230) fetches attachment metadata, resolves the attachment container, requests Confluence's supported attachment download endpoint, follows the returned media redirect, and streams the file to an `io.Writer`.
 
 ```go
 file, err := os.Create("attachment.zip")
@@ -120,7 +153,7 @@ if err != nil {
 }
 ```
 
-You can also pass query parameters (for example, to request a specific version):
+You can also pass query parameters, for example to request a specific version:
 
 ```go
 version := 2
@@ -128,9 +161,11 @@ params := &confluence.AttachmentGetParams{Version: &version}
 err = client.Attachment().Download(ctx, "att-123456", params, file)
 ```
 
+Errors from attachment downloads also include the attempted URL so redirect validation, unexpected status responses, and streaming failures are easier to diagnose.
+
 ### Download by direct URL
 
-[`AttachmentService.DownloadByURL`](attachment/service.go:284) is deprecated and is no longer used as a fallback by [`AttachmentService.Download`](attachment/service.go:229). Prefer `Download` for Confluence attachment IDs; use `DownloadByURL` only when you already have a caller-supplied absolute download URL.
+[`AttachmentService.DownloadByURL`](attachment/service.go:285) is deprecated and is no longer used as a fallback by [`AttachmentService.Download`](attachment/service.go:230). Prefer `Download` for Confluence attachment IDs. Use `DownloadByURL` only when the caller already has an absolute attachment download URL.
 
 ```go
 err = client.Attachment().DownloadByURL(ctx, "https://wiki.example.com/download/attachments/123/file.zip", file)
@@ -141,70 +176,28 @@ if err != nil {
 
 ## Other services
 
-The root [`confluence`](client.go:1) package is the entrypoint for creating clients and accessing services. Domain APIs and shared types live in subpackages:
+The root [`confluence`](client.go:1) package is the entry point for creating clients and accessing services. Domain APIs and shared types live in subpackages:
 
 | Package | Description | Docs |
 |---------|-------------|------|
 | [`export`](export/service.go:1) | PDF export workflow. | [`export/DOCS.md`](export/DOCS.md) |
 | [`page`](page/service.go:1) | REST v2 page operations. | [`page/DOCS.md`](page/DOCS.md) |
 | [`space`](space/service.go:1) | REST v2 space operations. | [`space/DOCS.md`](space/DOCS.md) |
-| [`attachment`](attachment/service.go:1) | REST v2 attachment operations. | [`attachment/DOCS.md`](attachment/DOCS.md) |
+| [`attachment`](attachment/service.go:1) | REST v2 attachment operations and download helpers. | [`attachment/DOCS.md`](attachment/DOCS.md) |
 | [`label`](label/service.go:1) | REST v2 label operations. | [`label/DOCS.md`](label/DOCS.md) |
 | [`models`](models/models_generated.go:1) | OpenAPI-generated request/response models. | [`models/DOCS.md`](models/DOCS.md) |
-| [`params`](params/params.go:1) | Query parameter structs and helpers. | [`params/DOCS.md`](params/DOCS.md) |
-| [`internal/transport`](internal/transport/transport.go:1) | Internal transport helpers. | [`internal/transport/DOCS.md`](internal/transport/DOCS.md) |
+| [`params`](params/params.go:1) | Query parameter structs and paginated result helpers. | [`params/DOCS.md`](params/DOCS.md) |
+| [`internal/transport`](internal/transport/transport.go:1) | Internal transport, query, and JSON helpers. | [`internal/transport/DOCS.md`](internal/transport/DOCS.md) |
 
 > **Note:** Every package includes a `DOCS.md` file generated by [gomarkdoc](https://github.com/princjef/gomarkdoc). These files contain the full API reference for types, functions, and methods in that package.
 
-### Optional subpackage usage
-
-You can also import subpackages directly if you prefer a more modular setup:
-
-```go
-import (
-    "context"
-    "time"
-
-    confluence "github.com/umats/go-confluence"
-    "github.com/umats/go-confluence/export"
-)
-
-func main() {
-    client, _ := confluence.NewClient("https://wiki.example.com", confluence.WithTimeout(30*time.Second))
-    _ = export.NewService(client)
-    _ = context.Background()
-}
-```
-
-## Client options
-
-| Option | Description |
-|--------|-------------|
-| [`WithBasicAuth(username, password)`](client.go:62) | Sets username and password (or API token) for HTTP Basic Auth. |
-| [`WithHTTPClient(hc)`](client.go:71) | Replaces the default [`http.Client`](client.go:43). |
-| [`WithPollInterval(d)`](client.go:82) | Sets how often to poll a Cloud export task (default: 3s). |
-| [`WithPollTimeout(d)`](client.go:93) | Sets the maximum time to wait for a Cloud export task. |
-| [`WithTimeout(d)`](client.go:104) | Sets the HTTP request timeout. |
-| [`WithRequireHTTPS()`](client.go:115) | Enforces that `baseURL` uses the `https` scheme. |
-| [`WithAllowedRedirectHosts(hosts...)`](client.go:123) | Limits export download redirects to the allowed hosts. |
-| [`WithAllowCrossHostContentURL()`](client.go:144) | Allows custom content URLs to point at other hosts. |
-
 ## Service interfaces
 
-For dependency injection and testing, use the smaller interfaces in [`services_interfaces.go`](services_interfaces.go:1) such as [`PageReader`](services_interfaces.go:224), [`PageWriter`](services_interfaces.go:275), and [`PageCommentsReader`](services_interfaces.go:328). The full [`PageService`](services_interfaces.go:385) composes these subsets for backward compatibility.
+For dependency injection and testing, use the smaller interfaces in [`services_interfaces.go`](services_interfaces.go:1) such as [`PageReader`](services_interfaces.go:11), [`PageWriter`](services_interfaces.go:62), [`AttachmentReader`](services_interfaces.go:273), and [`ExportService`](services_interfaces.go:380). The larger [`PageService`](services_interfaces.go:172), [`AttachmentService`](services_interfaces.go:351), and related interfaces compose those subsets for backward compatibility.
 
 ## Query parameters
 
-[`BuildQuery`](internal/transport/query.go:1) accepts structs (using `json` tags), `url.Values`, and `map[string]string`/`map[string][]string`. Struct fields respect `omitempty` and skip `json:"-"`.
-
-## Error handling
-
-| Error | Reason |
-|-------|--------|
-| [`ErrMissingLocation`](client.go:33) | The export response did not include a `Location` header. |
-| [`ErrTaskIDNotFound`](client.go:38) | The Cloud export response did not include a task ID. |
-| [`ErrTaskFailed`](client.go:29) | The Confluence export task failed. |
-| [`ErrTaskResultEmpty`](client.go:31) | The task finished without a result URL. |
+[`BuildQuery`](internal/transport/query.go:1) accepts structs that use `json` tags, `url.Values`, and `map[string]string`/`map[string][]string`. Struct fields respect `omitempty` and skip `json:"-"`.
 
 ## Development
 
@@ -215,11 +208,14 @@ This project uses [Task](https://taskfile.dev) for common commands:
 | `task test` | Run unit tests. |
 | `task test:race` | Run unit tests with the race detector. |
 | `task test:cover` | Run tests and print coverage. |
-| `task test:integration` | Run integration tests (requires a `.env` file). |
+| `task test:integration` | Run integration tests with the `integration` build tag after loading `.env`. |
 | `task lint` | Run `golangci-lint`. |
 | `task lint:fix` | Run `golangci-lint` with auto-fix. |
+| `task docs` | Regenerate package `DOCS.md` files with `gomarkdoc`. |
 
-Integration tests expect a `.env` file with Confluence credentials:
+### Integration test environment
+
+Integration tests fail fast when required credentials or fixture IDs are missing. Configure `.env` with:
 
 ```bash
 CONFLUENCE_URL=https://wiki.example.com
@@ -228,5 +224,10 @@ CONFLUENCE_PASSWORD=password-or-api-token
 CONFLUENCE_PAGE_ID=123456789
 CONFLUENCE_SPACE_ID=987654321
 CONFLUENCE_ATTACHMENT_ID=attachment-id
+CONFLUENCE_LABEL_ID=12345
+# Optional: use a page that contains at least one attachment for attachment-focused scenarios.
+# This may match CONFLUENCE_PAGE_ID only if that page has at least one attachment.
+CONFLUENCE_ATTACHMENT_PAGE_ID=123456789
 ```
 
+`CONFLUENCE_ATTACHMENT_PAGE_ID` is documented for integration fixture compatibility. If you use the same page as `CONFLUENCE_PAGE_ID`, that page must contain at least one attachment.
